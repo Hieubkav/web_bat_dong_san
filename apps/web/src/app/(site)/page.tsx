@@ -1,43 +1,116 @@
-"use client";
-import Link from "next/link";
-import { useQuery } from "convex/react";
-import { api } from "@dohy/backend/convex/_generated/api";
+import Script from "next/script";
 
-export default function Home() {
-  const todos = useQuery(api.todos.list) ?? [];
+const remoteOrigin = "https://batdongsan01.themeweb4s.com";
 
-  return (
-    <div className="container mx-auto max-w-3xl px-4 py-2">
-      <h1 className="mb-4 text-xl font-semibold">Next.js + Convex Core Starter</h1>
-      <div className="grid gap-6">
-        <section className="rounded-lg border p-4">
-          <h2 className="mb-2 font-medium">Todos Overview</h2>
-          {todos.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No todos yet. Head over to the todos demo to create your first task.
-            </p>
-          ) : (
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              {todos.slice(0, 3).map((todo) => (
-                <li key={todo._id.toString()} className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex h-2 w-2 rounded-full ${
-                      todo.completed ? "bg-green-500" : "bg-orange-400"
-                    }`}
-                  />
-                  <span className={todo.completed ? "line-through" : undefined}>{todo.text}</span>
-                </li>
-              ))}
-              {todos.length > 3 && (
-                <li className="text-xs text-muted-foreground">...and more</li>
-              )}
-            </ul>
-          )}
-          <Link href="/todos" className="mt-4 inline-block text-sm text-primary hover:underline">
-            
-          </Link>
-        </section>
-      </div>
-    </div>
+type RemoteAssets = {
+  html: string;
+  scripts: string[];
+  jsonLd: string[];
+};
+
+function transformRelativeUrls(markup: string): string {
+  const attributes = ["href", "src", "data-src", "action"];
+
+  return attributes.reduce((acc, attr) => {
+    const regex = new RegExp(`${attr}="\\/(?!\\/)`, "gi");
+    return acc.replace(regex, `${attr}="${remoteOrigin}/`);
+  }, markup);
+}
+
+async function loadRemotePage(): Promise<RemoteAssets> {
+  const response = await fetch(remoteOrigin, {
+    cache: "no-store",
+    next: { revalidate: 0 },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch remote page: ${response.status} ${response.statusText}`);
+  }
+
+  const html = await response.text();
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+
+  if (!bodyMatch) {
+    throw new Error("Remote page does not contain a <body> element.");
+  }
+
+  let bodyContent = bodyMatch[1];
+  const scripts: string[] = [];
+  const jsonLd: string[] = [];
+
+  bodyContent = bodyContent.replace(
+    /<script\b([^>]*)>([\s\S]*?)<\/script>/gi,
+    (match, attrs, content) => {
+      const srcMatch = attrs.match(/src="([^"]+)"/i);
+
+      if (srcMatch) {
+        let scriptSrc = srcMatch[1].trim();
+
+        if (scriptSrc.startsWith("//")) {
+          scriptSrc = `https:${scriptSrc}`;
+        } else if (scriptSrc.startsWith("/")) {
+          scriptSrc = `${remoteOrigin}${scriptSrc}`;
+        } else if (!scriptSrc.startsWith("http")) {
+          scriptSrc = `${remoteOrigin}/${scriptSrc}`;
+        }
+
+        if (!scripts.includes(scriptSrc)) {
+          scripts.push(scriptSrc);
+        }
+      } else if (/type="application\/ld\+json"/i.test(attrs)) {
+        const trimmed = content.trim();
+
+        if (trimmed) {
+          jsonLd.push(trimmed);
+        }
+      }
+
+      return "";
+    },
   );
+
+  const htmlWithAbsoluteUrls = transformRelativeUrls(bodyContent);
+
+  return {
+    html: htmlWithAbsoluteUrls,
+    scripts,
+    jsonLd,
+  };
+}
+
+export default async function Home() {
+  try {
+    const { html, scripts, jsonLd } = await loadRemotePage();
+
+    return (
+      <>
+        <div dangerouslySetInnerHTML={{ __html: html }} />
+        {jsonLd.map((content, index) => (
+          <Script
+            key={`json-ld-${index}`}
+            id={`json-ld-${index}`}
+            type="application/ld+json"
+            strategy="afterInteractive"
+            dangerouslySetInnerHTML={{ __html: content }}
+          />
+        ))}
+        {scripts.map((src) => (
+          <Script key={src} src={src} strategy="afterInteractive" />
+        ))}
+      </>
+    );
+  } catch (error) {
+    console.error("Khong the tai du lieu trang nguon:", error);
+
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-16 text-center">
+        <h1 className="mb-4 text-2xl font-semibold text-red-600">
+          Khong the tai trang tham chieu
+        </h1>
+        <p className="text-base text-muted-foreground">
+          Vui long kiem tra ket noi mang hoac thu lai sau.
+        </p>
+      </main>
+    );
+  }
 }
